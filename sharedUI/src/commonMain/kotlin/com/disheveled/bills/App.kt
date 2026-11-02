@@ -66,7 +66,7 @@ fun App(
         val spendVm: SpendViewModel = viewModel { SpendViewModel(aiProviders, store) }
         val state by vm.state.collectAsStateWithLifecycle()
         val spend by spendVm.state.collectAsStateWithLifecycle()
-        val launcher = capture.rememberLauncher(vm::onReceiptCaptured)
+        val launcher = capture.rememberLauncher(vm.maxPhotos, vm::onPhotosPicked)
 
         // One handler for the whole app rather than one per screen: the destinations live in
         // a single `when`, so back and the on-screen arrow can't drift apart. Disabled on
@@ -148,13 +148,18 @@ fun App(
                 // The session is remembered inside this branch, not beside the state, so the
                 // camera opens on arrival and is released the moment the screen goes away.
                 Screen.Camera -> CameraScreen(
-                    session = capture.rememberCameraSession(vm::onReceiptCaptured),
+                    session = capture.rememberCameraSession(vm::onPhotoTaken),
+                    pages = state.pages,
+                    maxPhotos = vm.maxPhotos,
                     onClose = { vm.goTo(origin) },
                     onPickFromGallery = launcher::pickFromGallery,
+                    onRemovePage = vm::removePage,
+                    onRead = vm::readPages,
                 )
 
                 Screen.Scanning -> ScanningScreen(
                     preview = state.capturedPreview,
+                    photoCount = state.capturedCount,
                     onCancel = { vm.goTo(origin) },
                 )
 

@@ -16,7 +16,7 @@ fun apiKey(name: String): String =
         .orElse(providers.environmentVariable(name))
         .getOrElse("")
 
-val apiKeyNames = listOf("GEMINI_API_KEY", "GROQ_API_KEY", "NVIDIA_API_KEY")
+val apiKeyNames = listOf("GEMINI_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "NVIDIA_API_KEY")
 
 kotlin {
     compilerOptions {

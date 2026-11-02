@@ -25,8 +25,8 @@ the iOS app is still a placeholder.
 - The model only extracts data and writes prose. All arithmetic stays in plain Kotlin
   (`SplitCalculator`, `SpendCalculator`), with money held as `Long` in minor units.
 - AI providers are OpenAI-compatible chat completions with strict JSON schemas, tried in order:
-  Gemini, then Groq, then NVIDIA NIM. Only provider-side failures (network, rate limit, 5xx)
-  fall through to the next one.
+  Gemini 3.6 Flash, then Gemini 3.5 Flash Lite, then Mistral, then Groq, then NVIDIA NIM. Only
+  provider-side failures (network, rate limit, 5xx) fall through to the next one.
 
 ## Setup
 
@@ -36,6 +36,7 @@ Add at least one API key to `local.properties` (or as environment variables of t
 
 ```properties
 GEMINI_API_KEY=...
+MISTRAL_API_KEY=...
 GROQ_API_KEY=...
 NVIDIA_API_KEY=...
 ```

@@ -58,22 +58,31 @@ private const val JPEG_QUALITY = 85
 class AndroidReceiptCapture : ReceiptCapture {
 
     @Composable
-    override fun rememberLauncher(onCaptured: (CapturedReceipt) -> Unit): CaptureLauncher {
+    override fun rememberLauncher(maxPhotos: Int, onPicked: (List<CapturedReceipt>) -> Unit): CaptureLauncher {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
 
-        val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            if (uri != null) {
-                scope.launch { prepareFromUri(context, uri)?.let(onCaptured) }
+        val prepare = { uris: List<Uri> ->
+            if (uris.isNotEmpty()) {
+                scope.launch {
+                    val photos = uris.take(maxPhotos).mapNotNull { prepareFromUri(context, it) }
+                    if (photos.isNotEmpty()) onPicked(photos)
+                }
             }
         }
+        val single = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            prepare(listOfNotNull(uri))
+        }
+        // PickMultipleVisualMedia refuses a limit under 2, so a one-photo scan keeps the plain picker.
+        val multiple = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickMultipleVisualMedia(maxPhotos.coerceAtLeast(2)),
+        ) { uris -> prepare(uris) }
 
-        return remember(context) {
+        return remember(context, maxPhotos) {
             object : CaptureLauncher {
                 override fun pickFromGallery() {
-                    gallery.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                    )
+                    val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    if (maxPhotos > 1) multiple.launch(request) else single.launch(request)
                 }
             }
         }

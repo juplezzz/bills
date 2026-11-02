@@ -54,8 +54,12 @@ interface CameraSession {
  * implementation here without touching a line of shared code.
  */
 interface ReceiptCapture {
+    /**
+     * The gallery: up to [maxPhotos] photos at once, for a long receipt photographed in parts.
+     * They arrive in the order the platform picker returns them, which need not be top first.
+     */
     @Composable
-    fun rememberLauncher(onCaptured: (CapturedReceipt) -> Unit): CaptureLauncher
+    fun rememberLauncher(maxPhotos: Int, onPicked: (List<CapturedReceipt>) -> Unit): CaptureLauncher
 
     @Composable
     fun rememberCameraSession(onCaptured: (CapturedReceipt) -> Unit): CameraSession

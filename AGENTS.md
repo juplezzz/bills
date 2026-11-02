@@ -37,7 +37,7 @@ kept alive only by `iosApp`.
 
 ## Setup
 
-- `GEMINI_API_KEY`, `GROQ_API_KEY` and `NVIDIA_API_KEY` go in `local.properties` (or env vars of
+- `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY` and `NVIDIA_API_KEY` go in `local.properties` (or env vars of
   the same names for CI). Any one is enough; a provider without a key is skipped, and none at all
   builds fine and shows up in-app as `FailureReason.MissingApiKey`. Never commit or print them.
 - `BuildConfig` exists only in `androidApp`, so the keys are passed inward as
@@ -60,6 +60,10 @@ plus `Failed` from any scan; Pengeluaran adds `ExpenseEditor` and `Recap`. All n
   Split goes to Pengeluaran; back from Pengeluaran leaves the app. There is exactly
   one `NavigationBackHandler` (in `App.kt`); don't add per-screen ones — binding a second handler
   to the same state throws at runtime. Use `androidx.navigationevent`, not CMP's deprecated `BackHandler`.
+- A long receipt can go in up to `ReceiptScanner.maxPhotos` overlapping photos (3 today). Each
+  camera shot waits in `BillsState.pages` until "Baca"; gallery picks are read straight away;
+  closing the camera drops the pages. With only providers that read one photo, `maxPhotos` is 1
+  and the camera reads on the shutter as it always did.
 - `goTo()` cancels the in-flight scan when leaving `Scanning`. Scanning → Review is done inside the
   scan itself, never through `goTo()`.
 - Finished splits are saved through `BillsStore`; the Split tab's history list reads from it. Computing a
@@ -94,10 +98,16 @@ plus `Failed` from any scan; Pengeluaran adds `ExpenseEditor` and `Recap`. All n
   `splitFacts`, the monthly note (`monthNote`) from `MonthFacts`. `noteIsGrounded` drops a note
   that quotes any number not in its facts — a missing note is fine, a wrong figure isn't. Change
   a note's facts and its prompt together; `ai/NoteGroundingTest.kt` keeps a real bad recap as a case.
-- Providers are OpenAI-compatible chat completions, tried in order: Gemini (free tier), then
-  Groq, then NVIDIA NIM. Each `AiProvider` carries its own model, sampling and thinking control
+- Providers are OpenAI-compatible chat completions, tried in order: Gemini 3.6 Flash, then
+  Gemini 3.5 Flash Lite on the same key (free-tier quota is per model, 20 vs 500 a day), then
+  Mistral (free Experiment plan, Ministral 14B), then Groq, then NVIDIA NIM. Each `AiProvider` carries its own model, sampling and thinking control
   (`reasoning_budget` vs `reasoning_effort`); add one there, never by special-casing in
-  `ReceiptScanner`. Only provider-side failures (network, 429, 5xx, rejected key) fall through to
+  `ReceiptScanner`. The parts of a long receipt go to the model in ONE request
+  (`scanRequest`): the model lines them up and lists the overlap once, which merging separate
+  reads can't do, since two identical lines can be two real orders. `AiProvider.maxImages` is
+  measured on that, not on the API accepting the images: both Geminis and Ministral 14B read three
+  exactly; NIM and Groq take three but listed the overlap twice or broke, so they read single
+  photos only. Only provider-side failures (network, 429, 5xx, rejected key) fall through to
   the next — an unreadable receipt does not. Wire types are hand-rolled in `ChatWire.kt` because
   `sharedLogic` compiles for iOS — no JVM-only SDKs in `commonMain`.
 - `strict` JSON schema: every object needs `additionalProperties: false` and all properties in

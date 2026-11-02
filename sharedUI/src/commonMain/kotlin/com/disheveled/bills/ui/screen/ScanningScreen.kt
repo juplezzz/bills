@@ -54,6 +54,8 @@ import com.disheveled.bills.ui.topBarInsets
 @Composable
 internal fun ScanningScreen(
     preview: ImageBitmap?,
+    /** How many photos went with this scan; the frame shows the first. */
+    photoCount: Int,
     onCancel: () -> Unit,
 ) = BillsTheme(darkTheme = true) {
     val scheme = MaterialTheme.colorScheme
@@ -64,6 +66,7 @@ internal fun ScanningScreen(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             PhotoFrame(
                 preview = preview,
+                label = if (photoCount > 1) "$photoCount foto struk kamu" else "foto struk kamu",
                 modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().fillMaxHeight(0.82f)
                     .padding(start = 40.dp, end = 40.dp, top = 32.dp),
             )
@@ -85,7 +88,7 @@ internal fun ScanningScreen(
 
 /** Where the photo sits: a dashed outline with the photo faded inside it. */
 @Composable
-private fun PhotoFrame(preview: ImageBitmap?, modifier: Modifier) {
+private fun PhotoFrame(preview: ImageBitmap?, label: String, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
     val outline = scheme.outline
     Box(
@@ -110,7 +113,7 @@ private fun PhotoFrame(preview: ImageBitmap?, modifier: Modifier) {
             )
         }
         Text(
-            "foto struk kamu",
+            label,
             style = MaterialTheme.typography.labelSmall,
             color = scheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 14.dp),
