@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.disheveled.bills.ai.AiProvider
 import com.disheveled.bills.ai.FailureReason
+import com.disheveled.bills.ai.ReceiptPhoto
 import com.disheveled.bills.ai.ReceiptScanner
 import com.disheveled.bills.ai.ScanOutcome
 import com.disheveled.bills.db.BillsStore
@@ -106,7 +107,14 @@ internal data class BillsState(
     /** What [receipt] was for: the model's pick or a keyword guess until the user picks. */
     val category: Category = Category.Lainnya,
     val categoryPicked: Boolean = false,
+    /**
+     * Photos taken on the camera and not sent yet: the parts of a long receipt, top first.
+     * Dropped when the camera closes.
+     */
+    val pages: List<CapturedReceipt> = emptyList(),
+    /** The first photo being read, and how many were sent with it. */
     val capturedPreview: ImageBitmap? = null,
+    val capturedCount: Int = 0,
     /** False for manual entry — there is no extraction to second-guess in that case. */
     val fromScan: Boolean = false,
     val people: List<Person> = emptyList(),
@@ -161,7 +169,10 @@ internal class BillsViewModel(
     val state: StateFlow<BillsState> = _state.asStateFlow()
 
     private var nextItemId = 0
-    private var lastCapture: CapturedReceipt? = null
+    private var lastCapture: List<CapturedReceipt> = emptyList()
+
+    /** Most photos one scan takes; 1 when no provider with a key reads a receipt's parts together. */
+    val maxPhotos: Int get() = scanner.maxPhotos
 
     init {
         combine(store.splits(), store.splitShares()) { splits, shares -> splits to shares }
@@ -182,12 +193,38 @@ internal class BillsViewModel(
 
     // --- scanning -------------------------------------------------------------------
 
-    fun onReceiptCaptured(captured: CapturedReceipt) {
-        lastCapture = captured
-        _state.update { it.copy(screen = Screen.Scanning, capturedPreview = captured.preview) }
+    /**
+     * A photo from the camera. When a scan can take more than one, it waits on the camera
+     * for the next part or for [readPages]; otherwise it is read straight away, as always.
+     */
+    fun onPhotoTaken(photo: CapturedReceipt) {
+        if (maxPhotos == 1) return scan(listOf(photo))
+        _state.update { if (it.pages.size < maxPhotos) it.copy(pages = it.pages + photo) else it }
+    }
+
+    fun removePage(index: Int) = _state.update { it.copy(pages = it.pages.filterIndexed { i, _ -> i != index }) }
+
+    fun readPages() {
+        val pages = _state.value.pages
+        if (pages.isNotEmpty()) scan(pages)
+    }
+
+    /** Gallery picks are a whole receipt already, so they are read straight away. */
+    fun onPhotosPicked(photos: List<CapturedReceipt>) = scan(photos.take(maxPhotos))
+
+    private fun scan(photos: List<CapturedReceipt>) {
+        lastCapture = photos
+        _state.update {
+            it.copy(
+                screen = Screen.Scanning,
+                pages = emptyList(),
+                capturedPreview = photos.first().preview,
+                capturedCount = photos.size,
+            )
+        }
         scanJob?.cancel()
         scanJob = viewModelScope.launch {
-            when (val outcome = scanner.scan(captured.base64, captured.mediaType)) {
+            when (val outcome = scanner.scan(photos.map { ReceiptPhoto(it.base64, it.mediaType) })) {
                 is ScanOutcome.Success -> {
                     nextItemId = outcome.receipt.items.size
                     _state.update {
@@ -383,13 +420,19 @@ internal class BillsViewModel(
         // is made inside the scan itself, never through this function.
         if (_state.value.screen == Screen.Scanning) scanJob?.cancel()
         val tab = Tab.entries.firstOrNull { it.root == screen }
-        _state.update { it.copy(screen = screen, origin = tab ?: it.origin) }
+        _state.update {
+            it.copy(
+                screen = screen,
+                origin = tab ?: it.origin,
+                // Closing the camera throws away the parts taken so far, like closing it on one.
+                pages = if (screen == Screen.Camera) it.pages else emptyList(),
+            )
+        }
     }
 
-    /** Re-runs extraction on the photo already taken, so a transient failure costs no retake. */
+    /** Re-runs extraction on the photos already taken, so a transient failure costs no retake. */
     fun retryLastCapture() {
-        val captured = lastCapture ?: return
-        onReceiptCaptured(captured)
+        if (lastCapture.isNotEmpty()) scan(lastCapture)
     }
 
     fun computeSplit() {

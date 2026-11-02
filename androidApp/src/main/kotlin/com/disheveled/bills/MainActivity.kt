@@ -27,6 +27,9 @@ class MainActivity : ComponentActivity() {
                 // the keys are handed inward instead. Order is fallback order.
                 aiProviders = listOf(
                     AiProvider.gemini(BuildConfig.GEMINI_API_KEY),
+                    // Same key: Gemini's free quota is per model, so this is extra, not shared.
+                    AiProvider.geminiLite(BuildConfig.GEMINI_API_KEY),
+                    AiProvider.mistral(BuildConfig.MISTRAL_API_KEY),
                     AiProvider.groq(BuildConfig.GROQ_API_KEY),
                     AiProvider.nvidia(BuildConfig.NVIDIA_API_KEY),
                 ),

@@ -40,6 +40,9 @@ enum class FailureReason {
     Unreadable,
 }
 
+/** One photo of a receipt: JPEG or PNG bytes, base64 with no line breaks, already downscaled. */
+data class ReceiptPhoto(val base64: String, val mediaType: String = "image/jpeg")
+
 sealed interface ScanOutcome {
     data class Success(val receipt: Receipt) : ScanOutcome
     data class Failure(val reason: FailureReason, val detail: String? = null) : ScanOutcome
@@ -62,14 +65,23 @@ class ReceiptScanner(
 
     private val providers = providers.filter { it.apiKey.isNotBlank() }
 
-    /**
-     * @param imageBase64 JPEG or PNG bytes, base64 with no line breaks, already downscaled.
-     *   Smaller images cost fewer visual tokens and read just as well for receipt text.
-     */
-    suspend fun scan(imageBase64: String, mediaType: String = "image/jpeg"): ScanOutcome {
-        if (providers.isEmpty()) return ScanOutcome.Failure(FailureReason.MissingApiKey)
+    /** Most photos one scan can take: what the most capable provider with a key reads at once. */
+    val maxPhotos: Int = this.providers.maxOfOrNull { it.maxImages } ?: 1
 
-        val response = when (val result = call { scanRequest(it, imageBase64, mediaType) }) {
+    /**
+     * Reads one receipt from [photos]: a single photo, or a long receipt in up to [maxPhotos]
+     * overlapping parts, top first. All of them go to the model in one request, so it is the
+     * model that lines the parts up and drops the lines two photos share — that can't be done
+     * by merging separate reads, since two identical lines can also be two real orders.
+     */
+    suspend fun scan(photos: List<ReceiptPhoto>): ScanOutcome {
+        if (providers.isEmpty()) return ScanOutcome.Failure(FailureReason.MissingApiKey)
+        val able = providers.filter { it.maxImages >= photos.size }
+        if (photos.isEmpty() || able.isEmpty()) {
+            return ScanOutcome.Failure(FailureReason.ApiError, "no provider reads ${photos.size} photos at once")
+        }
+
+        val response = when (val result = call(able) { scanRequest(it, photos) }) {
             is Call.Ok -> result.response
             is Call.Failed -> return ScanOutcome.Failure(result.reason, result.detail)
         }
@@ -95,32 +107,6 @@ class ReceiptScanner(
         }
         return ScanOutcome.Success(receipt)
     }
-
-    private fun scanRequest(provider: AiProvider, imageBase64: String, mediaType: String) =
-        ChatRequest(
-            model = provider.model,
-            maxTokens = 16_384,
-            temperature = provider.extraction.temperature,
-            topP = provider.extraction.topP,
-            reasoningBudget = provider.extraction.reasoningBudget,
-            reasoningEffort = provider.extraction.reasoningEffort,
-            reasoningFormat = provider.extraction.reasoningFormat,
-            responseFormat = ResponseFormat(
-                jsonSchema = JsonSchemaSpec(name = "receipt", schema = receiptSchema),
-            ),
-            messages = listOf(
-                ChatMessage(role = "system", content = listOf(ContentPart.text(EXTRACTION_PROMPT))),
-                ChatMessage(
-                    role = "user",
-                    // Image before text — vision models read the instruction better once the
-                    // picture is already in context.
-                    content = listOf(
-                        ContentPart.image(imageBase64, mediaType),
-                        ContentPart.text("Extract this receipt."),
-                    ),
-                ),
-            ),
-        )
 
     /**
      * A short spoken-Indonesian recap of an already-computed split.
@@ -187,9 +173,9 @@ class ReceiptScanner(
      * When every provider fails, the first failure is the one reported: it is about the
      * provider the user set up first.
      */
-    private suspend fun call(request: (AiProvider) -> ChatRequest): Call {
+    private suspend fun call(to: List<AiProvider> = providers, request: (AiProvider) -> ChatRequest): Call {
         var firstFailure: Call.Failed? = null
-        for (provider in providers) {
+        for (provider in to) {
             when (val result = post(provider, request(provider))) {
                 is Call.Ok -> return result
                 is Call.Failed -> {
@@ -241,6 +227,42 @@ class ReceiptScanner(
         )
     }
 }
+
+internal fun scanRequest(provider: AiProvider, photos: List<ReceiptPhoto>) = ChatRequest(
+    model = provider.model,
+    maxTokens = 16_384,
+    temperature = provider.extraction.temperature,
+    topP = provider.extraction.topP,
+    reasoningBudget = provider.extraction.reasoningBudget,
+    reasoningEffort = provider.extraction.reasoningEffort,
+    reasoningFormat = provider.extraction.reasoningFormat,
+    responseFormat = ResponseFormat(
+        jsonSchema = JsonSchemaSpec(name = "receipt", schema = receiptSchema),
+    ),
+    messages = listOf(
+        ChatMessage(role = "system", content = listOf(ContentPart.text(EXTRACTION_PROMPT))),
+        ChatMessage(
+            role = "user",
+            // Images before text — vision models read the instruction better once the
+            // pictures are already in context. One photo gets exactly the request it always
+            // has; the parts of a long receipt get told how they fit together.
+            content = photos.map { ContentPart.image(it.base64, it.mediaType) } +
+                ContentPart.text(if (photos.size == 1) "Extract this receipt." else partsPrompt(photos.size)),
+        ),
+    ),
+)
+
+/**
+ * What read a 22-item receipt in three parts exactly (see [AiProvider.gemini]). The "same
+ * photo" sentence is for two real orders of the same thing, which dropping repeats would also
+ * drop; the last one is for gallery picks, which can arrive in any order.
+ */
+private fun partsPrompt(count: Int) =
+    "These $count photos are parts of one long receipt, in order from the top. Neighbouring photos " +
+        "overlap: the last lines of one photo are printed again at the top of the next. List each of " +
+        "those repeated lines once. Two identical lines inside the same photo are two separate items; " +
+        "keep both. If the photos are out of order, use the repeated lines, the header and the totals " +
+        "to put them in order. Extract the whole receipt as one."
 
 /**
  * Strips a leaked chain of thought.

@@ -1,5 +1,6 @@
 package com.disheveled.bills.ui.screen
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +9,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -21,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.disheveled.bills.ui.NotaGlyph
@@ -28,6 +32,7 @@ import com.disheveled.bills.ui.Glyph
 import com.disheveled.bills.ui.pressable
 import com.disheveled.bills.ui.CameraSession
 import com.disheveled.bills.ui.CameraStatus
+import com.disheveled.bills.ui.CapturedReceipt
 import com.disheveled.bills.ui.FrameCorners
 import com.disheveled.bills.ui.PrimaryButton
 import com.disheveled.bills.ui.ScannerOverlay
@@ -47,8 +52,13 @@ import com.disheveled.bills.ui.topBarInsets
 @Composable
 internal fun CameraScreen(
     session: CameraSession,
+    /** Photos taken so far of a long receipt, waiting for the next part or for [onRead]. */
+    pages: List<CapturedReceipt>,
+    maxPhotos: Int,
     onClose: () -> Unit,
     onPickFromGallery: () -> Unit,
+    onRemovePage: (Int) -> Unit,
+    onRead: () -> Unit,
 ) {
     when (session.status) {
         CameraStatus.NeedsPermission -> CameraBlocked(
@@ -73,8 +83,12 @@ internal fun CameraScreen(
 
         CameraStatus.Starting, CameraStatus.Ready -> Viewfinder(
             session = session,
+            pages = pages,
+            maxPhotos = maxPhotos,
             onClose = onClose,
             onPickFromGallery = onPickFromGallery,
+            onRemovePage = onRemovePage,
+            onRead = onRead,
         )
     }
 }
@@ -82,10 +96,15 @@ internal fun CameraScreen(
 @Composable
 private fun Viewfinder(
     session: CameraSession,
+    pages: List<CapturedReceipt>,
+    maxPhotos: Int,
     onClose: () -> Unit,
     onPickFromGallery: () -> Unit,
+    onRemovePage: (Int) -> Unit,
+    onRead: () -> Unit,
 ) {
     val ready = session.status == CameraStatus.Ready
+    val full = pages.size >= maxPhotos
     // Black, not the app background: until the first frame arrives this is what shows, and a
     // cream flash before a camera opens looks like a bug.
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -141,7 +160,13 @@ private fun Viewfinder(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                text = if (ready) "Pas-in struknya di dalam bingkai" else "Bentar, lagi buka kamera...",
+                text = when {
+                    !ready -> "Bentar, lagi buka kamera..."
+                    pages.isEmpty() -> "Pas-in struknya di dalam bingkai"
+                    full -> "Udah $maxPhotos foto, tinggal dibaca"
+                    // The overlap is what lets the model line the parts up and list each line once.
+                    else -> "Masih panjang? Foto lanjutannya, sisain 1–2 baris dari foto tadi"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = ScannerPaper.copy(alpha = 0.85f),
                 textAlign = TextAlign.Center,
@@ -153,19 +178,75 @@ private fun Viewfinder(
                 contentAlignment = Alignment.Center,
             ) {
                 Shutter(
-                    enabled = ready && !session.capturing,
+                    enabled = ready && !session.capturing && !full,
                     capturing = session.capturing,
                     onClick = session::capture,
                 )
 
-                Box(
-                    modifier = Modifier.align(Alignment.CenterStart)
-                        .pressable(onClick = onPickFromGallery, onClickLabel = "Pilih dari galeri")
-                        .size(48.dp).clip(CircleShape).background(ScannerOverlay.copy(alpha = 0.45f)),
-                    contentAlignment = Alignment.Center,
-                ) { Glyph(NotaGlyph.Gallery, ScannerPaper) }
+                if (pages.isEmpty()) {
+                    Box(
+                        modifier = Modifier.align(Alignment.CenterStart)
+                            .pressable(onClick = onPickFromGallery, onClickLabel = "Pilih dari galeri")
+                            .size(48.dp).clip(CircleShape).background(ScannerOverlay.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center,
+                    ) { Glyph(NotaGlyph.Gallery, ScannerPaper) }
+                } else {
+                    PageStack(
+                        pages = pages,
+                        onRemoveLast = { onRemovePage(pages.lastIndex) },
+                        modifier = Modifier.align(Alignment.CenterStart),
+                    )
+                    ReadButton(
+                        count = pages.size,
+                        onClick = onRead,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * The parts taken so far: the latest on top, the earlier ones peeking out behind it. Tapping
+ * it takes the latest back, for a blurred or cut-off shot.
+ */
+@Composable
+private fun PageStack(pages: List<CapturedReceipt>, onRemoveLast: () -> Unit, modifier: Modifier) {
+    val shape = RoundedCornerShape(2.dp)
+    Box(
+        modifier.pressable(onClick = onRemoveLast, onClickLabel = "Hapus foto terakhir").size(56.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        pages.forEachIndexed { index, page ->
+            val behind = pages.lastIndex - index
+            Box(
+                Modifier.offset(x = (-4).dp * behind, y = (-4).dp * behind).size(width = 36.dp, height = 48.dp)
+                    .clip(shape).background(ScannerPaper).border(1.dp, ScannerPaper, shape),
+            ) {
+                page.preview?.let {
+                    Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+        Box(
+            Modifier.align(Alignment.TopEnd).size(20.dp).clip(CircleShape).background(ScannerOverlay)
+                .border(1.dp, ScannerPaper, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { Glyph(NotaGlyph.Close, ScannerPaper, size = 12.dp, heavy = true) }
+    }
+}
+
+@Composable
+private fun ReadButton(count: Int, onClick: () -> Unit, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier.pressable(onClick = onClick, onClickLabel = "Baca $count foto")
+            .height(48.dp).clip(RoundedCornerShape(8.dp)).background(scheme.primary)
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Baca ($count)", style = MaterialTheme.typography.labelLarge, color = scheme.onPrimary)
     }
 }
 

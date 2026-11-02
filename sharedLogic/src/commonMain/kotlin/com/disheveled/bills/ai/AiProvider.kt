@@ -16,14 +16,19 @@ class AiProvider internal constructor(
     internal val extraction: Tuning,
     /** The split recap and the month note: relational, so a little thinking. */
     internal val note: Tuning,
+    /**
+     * Most photos of one long receipt this provider reads together in one request. A scan with
+     * more skips it; the bar is reading the overlap between photos once, not accepting them.
+     */
+    internal val maxImages: Int,
 ) {
     companion object {
         /**
          * First choice, on the free tier. A test receipt came back exactly right on 4 of 4
          * runs in 2.9–23.7s (the spread is the free tier queueing, not the model), and on
-         * real receipts it dropped the non-item noise by itself. The free quota ran out on the
-         * fifth call inside a minute, which is what [groq] is behind it for. Recaps: 3 of 3
-         * grounded, 1.7–2.5s.
+         * real receipts it dropped the non-item noise by itself. Recaps: 3 of 3 grounded,
+         * 1.7–2.5s. The free tier allows only 5 requests a minute and 20 a day (AI Studio,
+         * 2026-11-02), and a split spends two of them; [geminiLite] is behind it for that.
          *
          * Free-tier prompts may be used by Google to improve its products.
          */
@@ -38,6 +43,51 @@ class AiProvider internal constructor(
             // model's defaults.
             extraction = Tuning(reasoningEffort = "minimal"),
             note = Tuning(reasoningEffort = "low"),
+            // A 22-item receipt in three overlapping photos came back exact: the three overlap
+            // lines once, two identical lines inside one photo kept as two. 8.2s, 3,876 tokens.
+            maxImages = 3,
+        )
+
+        /**
+         * Gemini 3.5 Flash Lite on the same key: the free tier counts each model separately and
+         * gives this one 15 requests a minute and 500 a day, against [gemini]'s 5 and 20. On
+         * the 22-item test receipt it was exact as one photo (4.9s) and in three overlapping
+         * photos on 2 of 2 runs (4.3–4.7s); notes 6 of 6 grounded in 1.1–1.9s. Behind [gemini]
+         * rather than first only because it hasn't been tried on real, crumpled receipts yet.
+         *
+         * Free-tier prompts may be used by Google to improve its products.
+         */
+        fun geminiLite(apiKey: String) = AiProvider(
+            name = "Gemini Lite",
+            endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            apiKey = apiKey,
+            model = "gemini-3.5-flash-lite",
+            extraction = Tuning(reasoningEffort = "minimal"),
+            note = Tuning(reasoningEffort = "low"),
+            maxImages = 3,
+        )
+
+        /**
+         * Third, on the free Experiment plan, which allows Ministral 14B 30 requests and
+         * 937,500 tokens a minute (Small and Medium are 0 on it). The last one that reads long
+         * receipts once both Geminis are spent: three overlapping photos of a 22-item receipt came back exact on 2 of
+         * 2 runs in 18–29s (7,780 tokens). As one photo the total was right but two identical
+         * lines came back merged as one with qty 2. No thinking, so `content` is a plain string;
+         * Large 4 reads as well but always thinks and answers in chunks this wire can't read.
+         *
+         * Notes at 0.2: 6 of 6 grounded, ~2s, chattier than Gemini ("Wah, …"). At the default
+         * temperature one split recap of three worked out a difference itself and was dropped.
+         *
+         * Experiment-plan requests may be used by Mistral to train its models.
+         */
+        fun mistral(apiKey: String) = AiProvider(
+            name = "Mistral",
+            endpoint = "https://api.mistral.ai/v1/chat/completions",
+            apiKey = apiKey,
+            model = "ministral-14b-2512",
+            extraction = Tuning(),
+            note = Tuning(temperature = 0.2),
+            maxImages = 3,
         )
 
         /**
@@ -56,6 +106,10 @@ class AiProvider internal constructor(
             // of prices needs.
             extraction = Tuning(temperature = 0.7, topP = 0.8, reasoningEffort = "none"),
             note = Tuning(temperature = 1.0, topP = 0.95, reasoningEffort = "low", reasoningFormat = "hidden"),
+            // The 22-item receipt as one photo came back exact in 2.8s, but in three parts (6,838
+            // input tokens, nearly the minute's 7,000) the model degenerated on both runs
+            // ("parse-received-received-…") and Groq answered 400 json_validate_failed.
+            maxImages = 1,
         )
 
         /**
@@ -78,6 +132,9 @@ class AiProvider internal constructor(
             model = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             extraction = Tuning(temperature = 0.6, topP = 0.95, reasoningBudget = 0),
             note = Tuning(temperature = 0.6, topP = 0.95, reasoningBudget = 512),
+            // It takes three photos, but listed the overlap lines twice on 2 of 2 runs (25
+            // items for 22, Rp 53–65 ribu over) and dropped the PB1 line.
+            maxImages = 1,
         )
     }
 }

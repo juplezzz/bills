@@ -41,12 +41,14 @@ private fun chatReply(content: String) = buildJsonObject {
 }.toString()
 
 /**
- * Scans one photo across fake providers, each named by its host and answering as given, in
- * that order. Returns the outcome and the hosts that were actually called.
+ * Scans [photos] photos across fake providers, each named by its host and answering as given,
+ * in that order. Returns the outcome and the hosts that were actually called.
  */
 private fun scanWith(
     vararg answers: Pair<String, Answer>,
     withoutKey: Set<String> = emptySet(),
+    maxImages: Map<String, Int> = emptyMap(),
+    photos: Int = 1,
 ): Pair<ScanOutcome, List<String>> = runBlocking {
     val called = mutableListOf<String>()
     val engine = MockEngine { request ->
@@ -60,7 +62,12 @@ private fun scanWith(
             Answer.Offline -> throw IllegalStateException("connection reset")
         }
     }
-    val providers = answers.map { (host, _) ->
+    val scanner = ReceiptScanner(fakeProviders(answers.map { it.first }, withoutKey, maxImages), HttpClient(engine) { install(ContentNegotiation) { json(json) } })
+    scanner.scan(List(photos) { ReceiptPhoto("aW1n") }) to called
+}
+
+private fun fakeProviders(hosts: List<String>, withoutKey: Set<String> = emptySet(), maxImages: Map<String, Int> = emptyMap()) =
+    hosts.map { host ->
         AiProvider(
             name = host,
             endpoint = "https://$host/v1/chat/completions",
@@ -68,11 +75,9 @@ private fun scanWith(
             model = "model",
             extraction = Tuning(),
             note = Tuning(),
+            maxImages = maxImages[host] ?: 3,
         )
     }
-    val scanner = ReceiptScanner(providers, HttpClient(engine) { install(ContentNegotiation) { json(json) } })
-    scanner.scan("aW1n") to called
-}
 
 class ReceiptScannerFallbackTest {
 
@@ -140,5 +145,24 @@ class ReceiptScannerFallbackTest {
         val (outcome, called) = scanWith("a" to Answer.Status(500), "b" to Answer.Reply(RECEIPT), withoutKey = setOf("a"))
         assertIs<ScanOutcome.Success>(outcome)
         assertEquals(listOf("b"), called)
+    }
+
+    @Test
+    fun aLongReceiptSkipsAProviderThatCantReadItsPartsTogether() {
+        val (outcome, called) = scanWith(
+            "a" to Answer.Reply(RECEIPT), "b" to Answer.Reply(RECEIPT),
+            maxImages = mapOf("a" to 1), photos = 3,
+        )
+        assertIs<ScanOutcome.Success>(outcome)
+        assertEquals(listOf("b"), called)
+    }
+
+    @Test
+    fun oneScanTakesAsManyPhotosAsTheBestProviderWithAKeyReads() {
+        val scanner = { withoutKey: Set<String> ->
+            ReceiptScanner(fakeProviders(listOf("a", "b"), withoutKey, mapOf("a" to 3, "b" to 1)), HttpClient(MockEngine { error("no calls") }))
+        }
+        assertEquals(3, scanner(emptySet()).maxPhotos)
+        assertEquals(1, scanner(setOf("a")).maxPhotos)
     }
 }
